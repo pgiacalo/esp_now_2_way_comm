@@ -1,8 +1,11 @@
 /**
- * A test program for the ESP32 that uses ESP-NOW protocol to communicate between 2 ESP32-S3 devices.
+ * two_way_comm.c
+ * 
+ * A program for the ESP32 that uses the ESP-NOW protocol for bidirectional communicate between two ESP32-S3 devices.
  * This program compiles using the ESP-IDF library and tools. 
  * 
- * This code was created by Claude. 
+ * Autho: Philip Giacalone
+ * Date: 2024-09-15 
  */
 
 #include <string.h>
@@ -20,8 +23,11 @@
 static const char *TAG = "ESP-NOW COMM";
 
 #define CHANNEL 1
-#define PEER_TIMEOUT_MS 30000 // 30 seconds
-#define DISCOVERY_INTERVAL_MS 5000 // 5 seconds
+#define PEER_TIMEOUT_MS 10000 		// 10 seconds
+#define DISCOVERY_INTERVAL_MS 5000 	// 5 seconds
+
+static int consecutive_failures = 0;
+#define MAX_CONSECUTIVE_FAILURES 3
 
 static uint8_t peer_mac[ESP_NOW_ETH_ALEN] = {0};
 static bool peer_found = false;
@@ -124,10 +130,10 @@ void app_main(void)
     wifi_init();
     ESP_ERROR_CHECK(init_esp_now());
 
-    uint8_t my_mac[6];
-    esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
+    uint8_t my_mac_address[6];
+    esp_read_mac(my_mac_address, ESP_MAC_WIFI_STA);
     ESP_LOGI(TAG, "-----------------------------------------------");
-    ESP_LOGI(TAG, "My MAC Address: "MACSTR, MAC2STR(my_mac));
+    ESP_LOGI(TAG, "My MAC Address: "MACSTR, MAC2STR(my_mac_address));
     ESP_LOGI(TAG, "-----------------------------------------------");
 
 
@@ -144,7 +150,7 @@ void app_main(void)
             peer_found = false;
         }
 
-        snprintf(message, sizeof(message), "Hello from %02X%02X_%d", my_mac[4], my_mac[5], sequence_number++);
+        snprintf(message, sizeof(message), "Hello from %02X%02X_%d", my_mac_address[4], my_mac_address[5], sequence_number++);
         
         if (peer_found) {
             esp_err_t result = esp_now_send(peer_mac, (const uint8_t *)message, strlen(message));
