@@ -26,9 +26,6 @@ static const char *TAG = "ESP-NOW COMM";
 #define PEER_TIMEOUT_MS 10000 		// 10 seconds
 #define DISCOVERY_INTERVAL_MS 5000 	// 5 seconds
 
-static int consecutive_failures = 0;
-#define MAX_CONSECUTIVE_FAILURES 3
-
 static uint8_t peer_mac[ESP_NOW_ETH_ALEN] = {0};
 static bool peer_found = false;
 static uint8_t broadcast_mac[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
