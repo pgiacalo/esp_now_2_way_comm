@@ -47,7 +47,9 @@ static void on_data_recv(const esp_now_recv_info_t *esp_now_info, const uint8_t 
     if (!peer_found && memcmp(esp_now_info->src_addr, broadcast_mac, ESP_NOW_ETH_ALEN) != 0) {
         memcpy(peer_mac, esp_now_info->src_addr, ESP_NOW_ETH_ALEN);
         peer_found = true;
+        ESP_LOGI(TAG, "****************");
         ESP_LOGI(TAG, "PEER FOUND! MAC: "MACSTR, MAC2STR(peer_mac));
+        ESP_LOGI(TAG, "****************");
 
         esp_now_peer_info_t peer_info = {
             .channel = CHANNEL,
