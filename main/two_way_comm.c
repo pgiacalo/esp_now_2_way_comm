@@ -29,6 +29,7 @@ static const char *TAG = "ESP-NOW COMM";
 #define DISCOVERY_INTERVAL_MS 5000  // 5 seconds
 #define MAX_RETRIES 5               // Maximum number of retries
 #define RETRY_DELAY_MS 13          // Delay between retries in milliseconds
+#define TRANSMIT_DELAY_MS 1000     // Delay between message transmissions in milliseconds
 
 static uint8_t peer_mac[ESP_NOW_ETH_ALEN] = {0};
 static bool peer_found = false;
@@ -205,6 +206,6 @@ void app_main(void)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Check more frequently
+        vTaskDelay(pdMS_TO_TICKS(TRANSMIT_DELAY_MS)); // Check more frequently
     }
 }
