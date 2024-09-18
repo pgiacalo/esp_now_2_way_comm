@@ -1,7 +1,7 @@
 /**
  * two_way_comm.c
  * 
- * A program for the ESP32 that uses the ESP-NOW protocol for bidirectional communicate between two ESP32-S3 devices.
+ * A program for the ESP32 that uses the ESP-NOW protocol for bidirectional communication between two ESP32-S3 devices.
  * This program compiles using the ESP-IDF library and tools. 
  * 
  * Author: Philip Giacalone
@@ -12,6 +12,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -26,12 +27,18 @@ static const char *TAG = "ESP-NOW COMM";
 #define CHANNEL 1
 #define PEER_TIMEOUT_MS 10000       // 10 seconds
 #define DISCOVERY_INTERVAL_MS 5000  // 5 seconds
+#define MAX_RETRIES 5               // Maximum number of retries
+#define RETRY_DELAY_MS 13          // Delay between retries in milliseconds
 
 static uint8_t peer_mac[ESP_NOW_ETH_ALEN] = {0};
 static bool peer_found = false;
 static uint8_t broadcast_mac[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static int64_t last_peer_time = 0;
 static char peer_mac_str[18] = {0};  // Store formatted MAC string
+static uint8_t my_mac_address[6];    // Global declaration of my_mac_address
+
+static SemaphoreHandle_t send_semaphore;
+static volatile bool send_success;
 
 static void wifi_init(void)
 {
@@ -46,11 +53,8 @@ static void wifi_init(void)
 
 static void on_data_sent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
-    if (status == ESP_NOW_SEND_SUCCESS) {
-        // ESP_LOGI(TAG, "Delivery Success to MAC: %s", peer_mac_str);
-    } else {
-        ESP_LOGW(TAG, "Delivery Fail to MAC: %s", peer_mac_str);
-    }
+    send_success = (status == ESP_NOW_SEND_SUCCESS);
+    xSemaphoreGive(send_semaphore);
 }
 
 static void on_data_recv(const esp_now_recv_info_t *esp_now_info, const uint8_t *data, int data_len)
@@ -77,9 +81,6 @@ static void on_data_recv(const esp_now_recv_info_t *esp_now_info, const uint8_t 
         }
         last_peer_time = esp_timer_get_time() / 1000; // Update last seen time
     }
-
-    // ESP_LOGI(TAG, "Data received from MAC: %s, len: %d", peer_mac_str, data_len);
-    // ESP_LOGI(TAG, "-->Receiving: %.*s", data_len, data);
 
     ESP_LOGI(TAG, "-->Received: %.*s (from: %s, len: %d)", data_len, (const char*)data, peer_mac_str, data_len);
 
@@ -116,6 +117,31 @@ static esp_err_t init_esp_now(void)
     return ESP_OK;
 }
 
+static bool send_with_retry(const uint8_t *mac_addr, const uint8_t *data, int len) {
+    for (int retry = 0; retry < MAX_RETRIES; retry++) {
+        esp_err_t result = esp_now_send(mac_addr, data, len);
+        if (result != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to queue message (Attempt %d): %s", retry + 1, esp_err_to_name(result));
+            vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
+            continue;
+        }
+
+        if (xSemaphoreTake(send_semaphore, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            if (send_success) {
+                ESP_LOGI(TAG, "<--Sending: %.*s (Attempt %d)", len, (const char*)data, retry + 1);
+                return true;
+            } else {
+                ESP_LOGW(TAG, "Delivery failed (Attempt %d)", retry + 1);
+            }
+        } else {
+            ESP_LOGW(TAG, "Timeout waiting for send callback (Attempt %d)", retry + 1);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
+    }
+    return false;  // All retries failed
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Initializing...");
@@ -131,7 +157,12 @@ void app_main(void)
     wifi_init();
     ESP_ERROR_CHECK(init_esp_now());
 
-    uint8_t my_mac_address[6];
+    send_semaphore = xSemaphoreCreateBinary();
+    if (send_semaphore == NULL) {
+        ESP_LOGE(TAG, "Failed to create semaphore");
+        return;
+    }
+
     esp_read_mac(my_mac_address, ESP_MAC_WIFI_STA);
     char my_mac_str[18];
     snprintf(my_mac_str, sizeof(my_mac_str), MACSTR, MAC2STR(my_mac_address));
@@ -156,28 +187,21 @@ void app_main(void)
         snprintf(message, sizeof(message), "%02X%02X_%d", my_mac_address[4], my_mac_address[5], sequence_number++);
         
         if (peer_found) {
-            esp_err_t result = esp_now_send(peer_mac, (const uint8_t *)message, strlen(message));
-            if (result == ESP_OK) {
-                ESP_LOGI(TAG, "<--Sending: %s", message);
-            } else {
-                ESP_LOGE(TAG, "Error sending message to peer: %s", esp_err_to_name(result));
-                if (result == ESP_ERR_ESPNOW_NOT_FOUND) {
-                    ESP_LOGW(TAG, "Peer not found. Removing peer.");
-                    esp_now_del_peer(peer_mac);
-                    peer_found = false;
-                    memset(peer_mac_str, 0, sizeof(peer_mac_str));
-                }
+            if (!send_with_retry(peer_mac, (const uint8_t *)message, strlen(message))) {
+                ESP_LOGE(TAG, "Failed to send message after %d attempts. Removing peer.", MAX_RETRIES);
+                esp_now_del_peer(peer_mac);
+                peer_found = false;
+                memset(peer_mac_str, 0, sizeof(peer_mac_str));
             }
         }
 
         // Send discovery message periodically
         if (!peer_found || (current_time - last_discovery_time > DISCOVERY_INTERVAL_MS)) {
             ESP_LOGI(TAG, "Broadcasting discovery message.");
-            esp_err_t result = esp_now_send(broadcast_mac, (const uint8_t *)message, strlen(message));
-            if (result == ESP_OK) {
+            if (send_with_retry(broadcast_mac, (const uint8_t *)message, strlen(message))) {
                 last_discovery_time = current_time;
             } else {
-                ESP_LOGE(TAG, "Error broadcasting discovery message: %s", esp_err_to_name(result));
+                ESP_LOGE(TAG, "Failed to broadcast discovery message after %d attempts.", MAX_RETRIES);
             }
         }
 
