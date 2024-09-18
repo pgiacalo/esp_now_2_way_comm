@@ -4,8 +4,9 @@
  * A program for the ESP32 that uses the ESP-NOW protocol for bidirectional communicate between two ESP32-S3 devices.
  * This program compiles using the ESP-IDF library and tools. 
  * 
- * Autho: Philip Giacalone
+ * Author: Philip Giacalone
  * Date: 2024-09-15 
+ * Modified: [Current Date]
  */
 
 #include <string.h>
@@ -23,13 +24,14 @@
 static const char *TAG = "ESP-NOW COMM";
 
 #define CHANNEL 1
-#define PEER_TIMEOUT_MS 10000 		// 10 seconds
-#define DISCOVERY_INTERVAL_MS 5000 	// 5 seconds
+#define PEER_TIMEOUT_MS 10000       // 10 seconds
+#define DISCOVERY_INTERVAL_MS 5000  // 5 seconds
 
 static uint8_t peer_mac[ESP_NOW_ETH_ALEN] = {0};
 static bool peer_found = false;
 static uint8_t broadcast_mac[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static int64_t last_peer_time = 0;
+static char peer_mac_str[18] = {0};  // Store formatted MAC string
 
 static void wifi_init(void)
 {
@@ -45,9 +47,9 @@ static void wifi_init(void)
 static void on_data_sent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
     if (status == ESP_NOW_SEND_SUCCESS) {
-        ESP_LOGI(TAG, "Last Packet Send Status: Delivery Success to MAC: "MACSTR, MAC2STR(mac_addr));
+        // ESP_LOGI(TAG, "Delivery Success to MAC: %s", peer_mac_str);
     } else {
-        ESP_LOGW(TAG, "Last Packet Send Status: Delivery Fail to MAC: "MACSTR, MAC2STR(mac_addr));
+        ESP_LOGW(TAG, "Delivery Fail to MAC: %s", peer_mac_str);
     }
 }
 
@@ -61,8 +63,9 @@ static void on_data_recv(const esp_now_recv_info_t *esp_now_info, const uint8_t 
             }
             memcpy(peer_mac, esp_now_info->src_addr, ESP_NOW_ETH_ALEN);
             peer_found = true;
+            snprintf(peer_mac_str, sizeof(peer_mac_str), MACSTR, MAC2STR(peer_mac));
             ESP_LOGI(TAG, "****************");
-            ESP_LOGI(TAG, "PEER FOUND! MAC: "MACSTR, MAC2STR(peer_mac));
+            ESP_LOGI(TAG, "PEER FOUND! MAC: %s", peer_mac_str);
             ESP_LOGI(TAG, "****************");
 
             esp_now_peer_info_t peer_info = {
@@ -75,9 +78,10 @@ static void on_data_recv(const esp_now_recv_info_t *esp_now_info, const uint8_t 
         last_peer_time = esp_timer_get_time() / 1000; // Update last seen time
     }
 
-    ESP_LOGI(TAG, "Data received from MAC: "MACSTR", len: %d", 
-             MAC2STR(esp_now_info->src_addr), data_len);
-    ESP_LOGI(TAG, "Receiving message: %.*s", data_len, data);
+    // ESP_LOGI(TAG, "Data received from MAC: %s, len: %d", peer_mac_str, data_len);
+    // ESP_LOGI(TAG, "-->Receiving: %.*s", data_len, data);
+
+    ESP_LOGI(TAG, "-->Received: %.*s (from: %s, len: %d)", data_len, (const char*)data, peer_mac_str, data_len);
 
     // Simple command handling
     if (strncmp((char*)data, "CMD:", 4) == 0) {
@@ -129,10 +133,11 @@ void app_main(void)
 
     uint8_t my_mac_address[6];
     esp_read_mac(my_mac_address, ESP_MAC_WIFI_STA);
+    char my_mac_str[18];
+    snprintf(my_mac_str, sizeof(my_mac_str), MACSTR, MAC2STR(my_mac_address));
     ESP_LOGI(TAG, "-----------------------------------------------");
-    ESP_LOGI(TAG, "My MAC Address: "MACSTR, MAC2STR(my_mac_address));
+    ESP_LOGI(TAG, "My MAC Address: %s", my_mac_str);
     ESP_LOGI(TAG, "-----------------------------------------------");
-
 
     char message[64];
     int sequence_number = 0;
@@ -145,20 +150,22 @@ void app_main(void)
             ESP_LOGW(TAG, "Peer timed out. Removing peer.");
             esp_now_del_peer(peer_mac);
             peer_found = false;
+            memset(peer_mac_str, 0, sizeof(peer_mac_str));
         }
 
-        snprintf(message, sizeof(message), "Hello from %02X%02X_%d", my_mac_address[4], my_mac_address[5], sequence_number++);
+        snprintf(message, sizeof(message), "%02X%02X_%d", my_mac_address[4], my_mac_address[5], sequence_number++);
         
         if (peer_found) {
             esp_err_t result = esp_now_send(peer_mac, (const uint8_t *)message, strlen(message));
             if (result == ESP_OK) {
-                ESP_LOGI(TAG, "Sending message: %s", message);
+                ESP_LOGI(TAG, "<--Sending: %s", message);
             } else {
                 ESP_LOGE(TAG, "Error sending message to peer: %s", esp_err_to_name(result));
                 if (result == ESP_ERR_ESPNOW_NOT_FOUND) {
                     ESP_LOGW(TAG, "Peer not found. Removing peer.");
                     esp_now_del_peer(peer_mac);
                     peer_found = false;
+                    memset(peer_mac_str, 0, sizeof(peer_mac_str));
                 }
             }
         }
@@ -168,10 +175,9 @@ void app_main(void)
             ESP_LOGI(TAG, "Broadcasting discovery message.");
             esp_err_t result = esp_now_send(broadcast_mac, (const uint8_t *)message, strlen(message));
             if (result == ESP_OK) {
-                ESP_LOGI(TAG, "Broadcasted message: %s", message);
                 last_discovery_time = current_time;
             } else {
-                ESP_LOGE(TAG, "Error broadcasting message: %s", esp_err_to_name(result));
+                ESP_LOGE(TAG, "Error broadcasting discovery message: %s", esp_err_to_name(result));
             }
         }
 
